@@ -19,20 +19,32 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local["infill2"] = df_local["infill"] ** 2
     df_local["infill3"] = df_local["infill"] ** 3
     df_local["infill4"] = df_local["infill"] ** 4
+    df_local["infill5"] = df_local["infill"] ** 5
 
     df_local["contours2"] = df_local["contours"] ** 2
     df_local["contours3"] = df_local["contours"] ** 3
 
     df_local["layer2"] = df_local["layer_thickness"] ** 2
+    df_local["layer3"] = df_local["layer_thickness"] ** 3
 
     df_local["infill_x_contours"] = df_local["infill"] * df_local["contours"]
     df_local["infill_x_layer"] = df_local["infill"] * df_local["layer_thickness"]
     df_local["contours_x_layer"] = df_local["contours"] * df_local["layer_thickness"]
 
+    df_local["infill2_x_layer"] = (df_local["infill"] ** 2) * df_local["layer_thickness"]
+    df_local["infill_x_contours2"] = df_local["infill"] * (df_local["contours"] ** 2)
+
     df_local["log_infill"] = np.log(df_local["infill"] + 1)
+    df_local["log_contours"] = np.log(df_local["contours"] + 1)
+
     df_local["sqrt_infill"] = np.sqrt(df_local["infill"])
+    df_local["sqrt_layer"] = np.sqrt(df_local["layer_thickness"])
+
     df_local["exp_layer"] = np.exp(-df_local["layer_thickness"])
+    df_local["exp_infill"] = np.exp(-df_local["infill"] / 100.0)
+
     df_local["sin_infill"] = np.sin(df_local["infill"] / 10)
+    df_local["cos_infill"] = np.cos(df_local["infill"] / 10)
 
     return df_local
 
@@ -58,7 +70,7 @@ def load_model(material):
 # ------------------------------------------------------------
 # UI
 # ------------------------------------------------------------
-st.title("Napovedni model UTS")
+st.title("Napovedni model UTS (ULTRA)")
 
 structure = st.selectbox("Izberi strukturo:", ["Hex", "Gyroid", "Grid"])
 material = st.selectbox("Izberi material:", ["PLA", "PLA+CF"])
@@ -69,7 +81,6 @@ layer = st.number_input("Debelina layerja (mm)", min_value=0.05, max_value=1.0, 
 if st.button("Napovej UTS"):
     model, encoder, feature_columns = load_model(material)
 
-    # osnovni input
     input_df = pd.DataFrame([{
         "structure": structure,
         "infill": infill,
@@ -77,7 +88,6 @@ if st.button("Napovej UTS"):
         "layer_thickness": layer
     }])
 
-    # one-hot za structure
     encoded = encoder.transform(input_df[["structure"]])
     encoded_df = pd.DataFrame(
         encoded,
@@ -89,11 +99,32 @@ if st.button("Napovej UTS"):
         axis=1
     )
 
-    # poskrbimo za isti vrstni red stolpcev kot pri treningu
     for col in feature_columns:
         if col not in X_base.columns:
             X_base[col] = 0
     X_base = X_base[feature_columns]
+
+    X_ext = add_synthetic_features(X_base)
+
+    uts_pred = float(model.predict(X_ext)[0])
+
+    st.success(f"Napovedana natezna trdnost (UTS): {uts_pred:.2f} MPa")
+
+    if "history" not in st.session_state:
+        st.session_state.history = []
+
+    st.session_state.history.append({
+        "Structure": structure,
+        "Material": material,
+        "Infill": infill,
+        "Contours": contours,
+        "Layer": layer,
+        "UTS napoved": round(uts_pred, 2)
+    })
+
+    st.subheader("Zgodovina napovedi")
+    st.dataframe(pd.DataFrame(st.session_state.history))
+
 
     # dodamo synthetic dummies
     X_ext = add_synthetic_features(X_base)

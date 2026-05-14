@@ -46,67 +46,148 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# Synthetic feature generator (ADVANCED)
+# Synthetic feature generator (ULTRA)
 # ---------------------------------------------------------
 def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local = df_local.copy()
 
-    # Polinomi
+    # osnovni polinomi
     df_local["infill2"] = df_local["infill"] ** 2
     df_local["infill3"] = df_local["infill"] ** 3
     df_local["infill4"] = df_local["infill"] ** 4
+    df_local["infill5"] = df_local["infill"] ** 5
 
     df_local["contours2"] = df_local["contours"] ** 2
     df_local["contours3"] = df_local["contours"] ** 3
 
     df_local["layer2"] = df_local["layer_thickness"] ** 2
+    df_local["layer3"] = df_local["layer_thickness"] ** 3
 
-    # Interakcije
+    # interakcije
     df_local["infill_x_contours"] = df_local["infill"] * df_local["contours"]
     df_local["infill_x_layer"] = df_local["infill"] * df_local["layer_thickness"]
     df_local["contours_x_layer"] = df_local["contours"] * df_local["layer_thickness"]
 
-    # Log transformacije
+    df_local["infill2_x_layer"] = (df_local["infill"] ** 2) * df_local["layer_thickness"]
+    df_local["infill_x_contours2"] = df_local["infill"] * (df_local["contours"] ** 2)
+
+    # log transformacije
     df_local["log_infill"] = np.log(df_local["infill"] + 1)
+    df_local["log_contours"] = np.log(df_local["contours"] + 1)
 
-    # Koren
+    # koreni
     df_local["sqrt_infill"] = np.sqrt(df_local["infill"])
+    df_local["sqrt_layer"] = np.sqrt(df_local["layer_thickness"])
 
-    # Eksponent
+    # eksponenti
     df_local["exp_layer"] = np.exp(-df_local["layer_thickness"])
+    df_local["exp_infill"] = np.exp(-df_local["infill"] / 100.0)
 
-    # Sinus za mikro-gladkost
+    # sinus za mikro-gladkost
     df_local["sin_infill"] = np.sin(df_local["infill"] / 10)
+    df_local["cos_infill"] = np.cos(df_local["infill"] / 10)
 
     return df_local
 
 # ---------------------------------------------------------
-# Train CatBoost na razširjenih featurjih
+# Train base model (na realnih podatkih)
 # ---------------------------------------------------------
-def train_catboost(df_local: pd.DataFrame):
+def train_base_model(df_local: pd.DataFrame):
     X_base = df_local.drop(columns=["UTS"])
     y = df_local["UTS"]
-
-    feature_cols = list(X_base.columns)
     X_ext = add_synthetic_features(X_base)
 
     model = CatBoostRegressor(
         depth=8,
         learning_rate=0.03,
-        n_estimators=2000,
+        n_estimators=1500,
         loss_function="RMSE",
         random_seed=42,
         verbose=False
     )
     model.fit(X_ext, y)
-
-    return model, feature_cols
+    return model, list(X_base.columns)
 
 # ---------------------------------------------------------
-# Train PLA
+# Generate dense synthetic grid za material
 # ---------------------------------------------------------
-df_pla = df_encoded[df_encoded["material"] == "PLA"].drop(columns=["material"])
-model_pla, feature_cols_pla = train_catboost(df_pla)
+def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.DataFrame):
+    df_mat = df_full[df_full["material"] == material_name]
+
+    inf_min, inf_max = int(df_mat["infill"].min()), int(df_mat["infill"].max())
+    cont_min, cont_max = int(df_mat["contours"].min()), int(df_mat["contours"].max())
+    layer_min, layer_max = df_mat["layer_thickness"].min(), df_mat["layer_thickness"].max()
+
+    inf_range = np.arange(inf_min, inf_max + 1, 1)          # vsak % infilla
+    cont_range = np.arange(cont_min, cont_max + 1, 1)       # vsaka kontura
+    layer_range = np.arange(layer_min, layer_max + 0.0001, 0.02)  # vsakih 0.02 mm
+
+    structures = list(encoder.categories_[0])
+
+    rows = []
+    for s in structures:
+        struct_ohe = encoder.transform(pd.DataFrame([[s]], columns=["structure"]))[0]
+        struct_cols = encoder.get_feature_names_out(["structure"])
+        for inf in inf_range:
+            for c in cont_range:
+                for lay in layer_range:
+                    row = {
+                        "material": material_name,
+                        "infill": float(inf),
+                        "contours": float(c),
+                        "layer_thickness": float(lay),
+                    }
+                    for col, val in zip(struct_cols, struct_ohe):
+                        row[col] = float(val)
+                    rows.append(row)
+
+    grid_df = pd.DataFrame(rows)
+    return grid_df
+
+# ---------------------------------------------------------
+# Train final model za en material (realni + synthetic grid)
+# ---------------------------------------------------------
+def train_ultra_for_material(material_name: str):
+    df_mat = df_encoded[df_encoded["material"] == material_name].drop(columns=["material"])
+
+    # base model na realnih podatkih
+    base_model, feature_cols = train_base_model(df_mat)
+
+    # synthetic grid (brez UTS)
+    grid_df = generate_dense_grid(material_name, encoder, df)
+
+    # pripravimo grid v isti obliki kot df_mat (brez UTS)
+    grid_encoded = grid_df.drop(columns=["material"])
+    # napovemo UTS z base modelom
+    X_grid_ext = add_synthetic_features(grid_encoded)
+    uts_grid = base_model.predict(X_grid_ext)
+
+    grid_encoded["UTS"] = uts_grid
+
+    # združimo realne + synthetic
+    df_full = pd.concat([df_mat, grid_encoded], axis=0).reset_index(drop=True)
+
+    X_base_full = df_full.drop(columns=["UTS"])
+    y_full = df_full["UTS"]
+
+    X_ext_full = add_synthetic_features(X_base_full)
+
+    final_model = CatBoostRegressor(
+        depth=8,
+        learning_rate=0.03,
+        n_estimators=2000,
+        loss_function="RMSE",
+        random_seed=123,
+        verbose=False
+    )
+    final_model.fit(X_ext_full, y_full)
+
+    return final_model, feature_cols
+
+# ---------------------------------------------------------
+# PLA
+# ---------------------------------------------------------
+model_pla, feature_cols_pla = train_ultra_for_material("PLA")
 
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump(
@@ -118,13 +199,12 @@ with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
         f,
     )
 
-print(" NAJMOČNEJŠI PLA model OK")
+print(" ULTRA PLA model OK")
 
 # ---------------------------------------------------------
-# Train PLA+CF
+# PLA+CF
 # ---------------------------------------------------------
-df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].drop(columns=["material"])
-model_cf, feature_cols_cf = train_catboost(df_cf)
+model_cf, feature_cols_cf = train_ultra_for_material("PLA+CF")
 
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump(
@@ -136,7 +216,4 @@ with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
         f,
     )
 
-print(" NAJMOČNEJŠI PLA+CF model OK")
-
-
-
+print(" ULTRA PLA+CF model OK")
