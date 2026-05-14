@@ -30,12 +30,8 @@ df = df.rename(columns={
 
 df = df[["structure", "infill", "contours", "material", "layer_thickness", "UTS"]]
 
-# normalize structure
 df["structure"] = df["structure"].astype(str).str.strip().str.capitalize()
-
-# unify material names
 df["material"] = df["material"].replace({"PLA CF": "PLA+CF"})
-
 df = df[df["material"].isin(["PLA", "PLA+CF"])].reset_index(drop=True)
 
 # ---------------------------------------------------------
@@ -51,21 +47,25 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# Smooth UTS using LOWESS (realistic + smooth)
+# Smooth + blend real data
 # ---------------------------------------------------------
-def smooth_material(df_local):
-    df_local = df_local.copy()
-    df_local = df_local.sort_values("infill")
+def smooth_and_blend(df_local):
+    df_local = df_local.sort_values("infill").copy()
 
     # LOWESS smoothing
     smoothed = lowess(df_local["UTS"], df_local["infill"], frac=0.4)
     df_local["UTS_smooth"] = smoothed[:, 1]
 
-    # interpolate missing infill values (1% resolution)
-    infill_new = np.arange(df_local["infill"].min(), df_local["infill"].max() + 1, 1)
-    uts_new = np.interp(infill_new, df_local["infill"], df_local["UTS_smooth"])
+    # blend real + smooth (kompromis)
+    df_local["UTS_blend"] = (
+        0.6 * df_local["UTS"] +
+        0.4 * df_local["UTS_smooth"]
+    )
 
-    # rebuild dataframe
+    # interpolate missing infill values
+    infill_new = np.arange(df_local["infill"].min(), df_local["infill"].max() + 1, 1)
+    uts_new = np.interp(infill_new, df_local["infill"], df_local["UTS_blend"])
+
     df_new = pd.DataFrame({
         "infill": infill_new,
         "UTS": uts_new,
@@ -80,15 +80,14 @@ def smooth_material(df_local):
 
     return df_new
 
-# split by material
 df_pla = df_encoded[df_encoded["material"] == "PLA"].drop(columns=["material"])
 df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].drop(columns=["material"])
 
-df_pla_smooth = smooth_material(df_pla)
-df_cf_smooth = smooth_material(df_cf)
+df_pla_blend = smooth_and_blend(df_pla)
+df_cf_blend = smooth_and_blend(df_cf)
 
 # ---------------------------------------------------------
-# Train CatBoost (smooth + real)
+# Train CatBoost
 # ---------------------------------------------------------
 def train_catboost(df_local):
     X = df_local.drop(columns=["UTS"])
@@ -106,15 +105,16 @@ def train_catboost(df_local):
     return [model]
 
 # PLA
-models_pla = train_catboost(df_pla_smooth)
+models_pla = train_catboost(df_pla_blend)
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump({"models": models_pla, "encoder": encoder}, f)
 
-print(" FINAL SMOOTH REAL PLA model OK")
+print("KOMPROMISNI PLA model OK")
 
 # PLA+CF
-models_cf = train_catboost(df_cf_smooth)
+models_cf = train_catboost(df_cf_blend)
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump({"models": models_cf, "encoder": encoder}, f)
 
-print(" FINAL SMOOTH REAL PLA+CF model OK")
+print("KOMPROMISNI PLA+CF model OK")
+
