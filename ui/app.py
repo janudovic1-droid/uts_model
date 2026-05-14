@@ -1,5 +1,6 @@
 import os
 import pickle
+import numpy as np
 import streamlit as st
 import pandas as pd
 
@@ -10,7 +11,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "..", "model")
 
 # ---------------------------------------------------------
-# 2) Load model based on material
+# 2) Load ensemble models
 # ---------------------------------------------------------
 @st.cache_resource
 def load_model(material):
@@ -22,7 +23,7 @@ def load_model(material):
     with open(model_path, "rb") as f:
         obj = pickle.load(f)
 
-    return obj["model"], obj["encoder"]
+    return obj["models"], obj["encoder"]
 
 # ---------------------------------------------------------
 # 3) Init history
@@ -47,8 +48,9 @@ layer = st.number_input("Debelina layerja (mm)", min_value=0.1, max_value=1.0, v
 # 5) Prediction
 # ---------------------------------------------------------
 if st.button("Napovej UTS"):
-    model, encoder = load_model(material)
+    models, encoder = load_model(material)
 
+    # Prepare input
     input_df = pd.DataFrame({
         "structure": [structure],
         "infill": [infill],
@@ -56,19 +58,24 @@ if st.button("Napovej UTS"):
         "layer_thickness": [layer]
     })
 
+    # One-hot encoding for structure
     encoded = encoder.transform(input_df[["structure"]])
     encoded_df = pd.DataFrame(
         encoded,
         columns=encoder.get_feature_names_out(["structure"])
     )
 
+    # Final model input
     model_input = pd.concat(
         [input_df.drop(columns=["structure"]), encoded_df],
         axis=1
     )
 
-    prediction = model.predict(model_input)[0]
+    # Ensemble prediction
+    preds = [m.predict(model_input)[0] for m in models]
+    prediction = float(np.mean(preds))
 
+    # Save to history
     st.session_state["history"].append({
         "Structure": structure,
         "Material": material,
