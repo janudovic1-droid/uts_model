@@ -46,7 +46,7 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# Synthetic feature generator (ULTRA+)
+# Synthetic feature generator (ULTRA++)
 # ---------------------------------------------------------
 def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local = df_local.copy()
@@ -82,8 +82,53 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local["cos_infill"] = np.cos(df_local["infill"] / 10)
 
     return df_local
+
 # ---------------------------------------------------------
-# Train base model (na realnih Excel podatkih)
+# Physics rows: če ni materiala → UTS = 0
+# ---------------------------------------------------------
+def add_physics_rows(df_mat: pd.DataFrame) -> pd.DataFrame:
+    df_mat = df_mat.copy()
+
+    if df_mat.empty:
+        return df_mat
+
+    base_row = df_mat.iloc[0].copy()
+    struct_cols = [c for c in df_mat.columns if c.startswith("structure_")]
+
+    rows = []
+
+    physics_points = [
+        # infill = 0
+        {"infill": 0.0, "contours": 1.0, "layer_thickness": 0.20, "UTS": 0.0},
+        {"infill": 0.0, "contours": 2.0, "layer_thickness": 0.20, "UTS": 0.0},
+        {"infill": 0.0, "contours": 1.0, "layer_thickness": 0.25, "UTS": 0.0},
+        {"infill": 0.0, "contours": 2.0, "layer_thickness": 0.25, "UTS": 0.0},
+        # contours = 0
+        {"infill": 20.0, "contours": 0.0, "layer_thickness": 0.20, "UTS": 0.0},
+        {"infill": 40.0, "contours": 0.0, "layer_thickness": 0.20, "UTS": 0.0},
+        # layer = 0 (teoretično, samo za sidro)
+        {"infill": 20.0, "contours": 2.0, "layer_thickness": 0.0, "UTS": 0.0},
+        {"infill": 40.0, "contours": 2.0, "layer_thickness": 0.0, "UTS": 0.0},
+    ]
+
+    for p in physics_points:
+        r = base_row.copy()
+        r["infill"] = p["infill"]
+        r["contours"] = p["contours"]
+        r["layer_thickness"] = p["layer_thickness"]
+        r["UTS"] = p["UTS"]
+        # strukturo pustimo isto kot base_row (ni kritično)
+        for c in struct_cols:
+            r[c] = base_row[c]
+        rows.append(r)
+
+    if rows:
+        df_phys = pd.DataFrame(rows)
+        df_mat = pd.concat([df_mat, df_phys], ignore_index=True)
+
+    return df_mat
+# ---------------------------------------------------------
+# Train base model (samo Excel + physics rows)
 # ---------------------------------------------------------
 def train_base_model(df_local: pd.DataFrame):
     X_base = df_local.drop(columns=["UTS"])
@@ -112,9 +157,9 @@ def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.
     cont_min, cont_max = int(df_mat["contours"].min()), int(df_mat["contours"].max())
     layer_min, layer_max = df_mat["layer_thickness"].min(), df_mat["layer_thickness"].max()
 
-    inf_range = np.arange(inf_min, inf_max + 1, 1)          # vsak % infilla
-    cont_range = np.arange(cont_min, cont_max + 1, 1)       # vsaka kontura
-    layer_range = np.arange(layer_min, layer_max + 0.0001, 0.02)  # vsakih 0.02 mm
+    inf_range = np.arange(inf_min, inf_max + 1, 1)
+    cont_range = np.arange(cont_min, cont_max + 1, 1)
+    layer_range = np.arange(layer_min, layer_max + 0.0001, 0.02)
 
     structures = list(encoder.categories_[0])
 
@@ -139,15 +184,21 @@ def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.
     return pd.DataFrame(rows)
 
 # ---------------------------------------------------------
-# Train ULTRA+ model for one material (Excel weighted)
+# Train ULTRA++ model (Excel + physics + synthetic)
 # ---------------------------------------------------------
 def train_ultra_plus(material_name: str):
-    df_mat = df_encoded[df_encoded["material"] == material_name].drop(columns=["material"])
+    df_mat_raw = df_encoded[df_encoded["material"] == material_name].drop(columns=["material"])
 
-    # 1) Base model samo na Excelu
+    # 1) Dodamo fizikalne vrstice (UTS=0, če ni materiala)
+    df_mat = add_physics_rows(df_mat_raw)
+
+    n_excel = len(df_mat_raw)
+    n_physics = len(df_mat) - n_excel
+
+    # 2) Base model samo na Excel + physics
     base_model, feature_cols = train_base_model(df_mat)
 
-    # 2) Synthetic grid
+    # 3) Synthetic grid
     grid_df = generate_dense_grid(material_name, encoder, df)
 
     grid_encoded = grid_df.drop(columns=["material"])
@@ -156,18 +207,27 @@ def train_ultra_plus(material_name: str):
     uts_grid = base_model.predict(X_grid_ext)
     grid_encoded["UTS"] = uts_grid
 
-    # 3) Združimo Excel + synthetic
+    n_synth = len(grid_encoded)
+
+    # 4) Združimo vse
     df_full = pd.concat([df_mat, grid_encoded], axis=0).reset_index(drop=True)
 
-    # 4) Uteži (Excel = 10, synthetic = 1)
-    weights = np.where(df_full.index < len(df_mat), 10, 1)
+    # 5) Uteži:
+    # Excel = 10
+    # Physics rows = 20
+    # Synthetic = 1
+    weights = np.concatenate([
+        np.full(n_excel, 10),
+        np.full(n_physics, 20),
+        np.full(n_synth, 1)
+    ])
 
     X_base_full = df_full.drop(columns=["UTS"])
     y_full = df_full["UTS"]
 
     X_ext_full = add_synthetic_features(X_base_full)
 
-    # 5) Final ULTRA+ model
+    # 6) Final ULTRA++ model
     final_model = CatBoostRegressor(
         depth=8,
         learning_rate=0.03,
@@ -191,7 +251,7 @@ with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
         f,
     )
 
-print(" ULTRA+ PLA model OK")
+print(" ULTRA++ PLA model OK")
 
 # ---------------------------------------------------------
 # Train PLA+CF
@@ -204,4 +264,4 @@ with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
         f,
     )
 
-print(" ULTRA+ PLA+CF model OK")
+print(" ULTRA++ PLA+CF model OK")

@@ -66,16 +66,16 @@ def load_model(material):
 # ------------------------------------------------------------
 # UI
 # ------------------------------------------------------------
-st.title("Napovedni model UTS")
+st.title("Napovedni model UTS (ULTRA++)")
 
-structure = st.selectbox("Izberi strukturo:", ["Hex", "Tri", "Lin"])
+structure = st.selectbox("Izberi strukturo:", ["Hex", "Gyroid", "Grid"])
 material = st.selectbox("Izberi material:", ["PLA", "PLA+CF"])
-infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40, step=5)
+infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40)
 contours = st.number_input("Število kontur", min_value=0, max_value=100, value=1)
-layer = st.number_input("Debelina layerja (mm)", min_value=0.05, max_value=1.0, value=0.20, step=0.01)
+layer = st.number_input("Debelina layerja (mm)", min_value=0.00, max_value=1.0, value=0.20, step=0.01)
 
 # ------------------------------------------------------------
-# History init (OUTSIDE button → no duplicates)
+# History init
 # ------------------------------------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -86,36 +86,43 @@ if "history" not in st.session_state:
 if st.button("Napovej UTS", key="predict"):
     model, encoder, feature_columns = load_model(material)
 
-    # osnovni input
-    input_df = pd.DataFrame([{
-        "structure": structure,
-        "infill": infill,
-        "contours": contours,
-        "layer_thickness": layer
-    }])
+    # --------------------------------------------------------
+    # HARD PHYSICS RULE (ULTRA++):
+    # Če je katerakoli vrednost 0 → UTS = 0
+    # --------------------------------------------------------
+    if infill == 0 or contours == 0 or layer == 0:
+        uts_pred = 0.0
+    else:
+        # osnovni input
+        input_df = pd.DataFrame([{
+            "structure": structure,
+            "infill": infill,
+            "contours": contours,
+            "layer_thickness": layer
+        }])
 
-    # one-hot encoding
-    encoded = encoder.transform(input_df[["structure"]])
-    encoded_df = pd.DataFrame(
-        encoded,
-        columns=encoder.get_feature_names_out(["structure"])
-    )
+        # one-hot encoding
+        encoded = encoder.transform(input_df[["structure"]])
+        encoded_df = pd.DataFrame(
+            encoded,
+            columns=encoder.get_feature_names_out(["structure"])
+        )
 
-    X_base = pd.concat(
-        [input_df.drop(columns=["structure"]), encoded_df],
-        axis=1
-    )
+        X_base = pd.concat(
+            [input_df.drop(columns=["structure"]), encoded_df],
+            axis=1
+        )
 
-    # poskrbimo za isti vrstni red stolpcev kot pri treningu
-    for col in feature_columns:
-        if col not in X_base.columns:
-            X_base[col] = 0
-    X_base = X_base[feature_columns]
+        # poskrbimo za isti vrstni red stolpcev kot pri treningu
+        for col in feature_columns:
+            if col not in X_base.columns:
+                X_base[col] = 0
+        X_base = X_base[feature_columns]
 
-    # synthetic dummies
-    X_ext = add_synthetic_features(X_base)
+        # synthetic dummies
+        X_ext = add_synthetic_features(X_base)
 
-    uts_pred = float(model.predict(X_ext)[0])
+        uts_pred = float(model.predict(X_ext)[0])
 
     st.success(f"Napovedana natezna trdnost (UTS): {uts_pred:.2f} MPa")
 
@@ -139,3 +146,4 @@ if st.button("Napovej UTS", key="predict"):
 # ------------------------------------------------------------
 st.subheader("Zgodovina napovedi")
 st.dataframe(pd.DataFrame(st.session_state.history))
+
