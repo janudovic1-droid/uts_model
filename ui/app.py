@@ -66,11 +66,11 @@ def load_model(material):
 # ------------------------------------------------------------
 # UI
 # ------------------------------------------------------------
-st.title("Napovedni model UTS (ULTRA)")
+st.title("Napovedni model UTS")
 
 structure = st.selectbox("Izberi strukturo:", ["Hex", "Tri", "Lin"])
 material = st.selectbox("Izberi material:", ["PLA", "PLA+CF"])
-infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=0, step=5)
+infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40, step=5)
 contours = st.number_input("Število kontur", min_value=0, max_value=100, value=1)
 layer = st.number_input("Debelina layerja (mm)", min_value=0.05, max_value=1.0, value=0.20, step=0.01)
 

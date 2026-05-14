@@ -46,12 +46,11 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# Synthetic feature generator (ULTRA)
+# Synthetic feature generator (ULTRA+)
 # ---------------------------------------------------------
 def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local = df_local.copy()
 
-    # osnovni polinomi
     df_local["infill2"] = df_local["infill"] ** 2
     df_local["infill3"] = df_local["infill"] ** 3
     df_local["infill4"] = df_local["infill"] ** 4
@@ -63,7 +62,6 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local["layer2"] = df_local["layer_thickness"] ** 2
     df_local["layer3"] = df_local["layer_thickness"] ** 3
 
-    # interakcije
     df_local["infill_x_contours"] = df_local["infill"] * df_local["contours"]
     df_local["infill_x_layer"] = df_local["infill"] * df_local["layer_thickness"]
     df_local["contours_x_layer"] = df_local["contours"] * df_local["layer_thickness"]
@@ -71,30 +69,26 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     df_local["infill2_x_layer"] = (df_local["infill"] ** 2) * df_local["layer_thickness"]
     df_local["infill_x_contours2"] = df_local["infill"] * (df_local["contours"] ** 2)
 
-    # log transformacije
     df_local["log_infill"] = np.log(df_local["infill"] + 1)
     df_local["log_contours"] = np.log(df_local["contours"] + 1)
 
-    # koreni
     df_local["sqrt_infill"] = np.sqrt(df_local["infill"])
     df_local["sqrt_layer"] = np.sqrt(df_local["layer_thickness"])
 
-    # eksponenti
     df_local["exp_layer"] = np.exp(-df_local["layer_thickness"])
     df_local["exp_infill"] = np.exp(-df_local["infill"] / 100.0)
 
-    # sinus za mikro-gladkost
     df_local["sin_infill"] = np.sin(df_local["infill"] / 10)
     df_local["cos_infill"] = np.cos(df_local["infill"] / 10)
 
     return df_local
-
 # ---------------------------------------------------------
-# Train base model (na realnih podatkih)
+# Train base model (na realnih Excel podatkih)
 # ---------------------------------------------------------
 def train_base_model(df_local: pd.DataFrame):
     X_base = df_local.drop(columns=["UTS"])
     y = df_local["UTS"]
+
     X_ext = add_synthetic_features(X_base)
 
     model = CatBoostRegressor(
@@ -109,7 +103,7 @@ def train_base_model(df_local: pd.DataFrame):
     return model, list(X_base.columns)
 
 # ---------------------------------------------------------
-# Generate dense synthetic grid za material
+# Generate dense synthetic grid (infill, contours, layer)
 # ---------------------------------------------------------
 def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.DataFrame):
     df_mat = df_full[df_full["material"] == material_name]
@@ -128,6 +122,7 @@ def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.
     for s in structures:
         struct_ohe = encoder.transform(pd.DataFrame([[s]], columns=["structure"]))[0]
         struct_cols = encoder.get_feature_names_out(["structure"])
+
         for inf in inf_range:
             for c in cont_range:
                 for lay in layer_range:
@@ -141,37 +136,38 @@ def generate_dense_grid(material_name: str, encoder: OneHotEncoder, df_full: pd.
                         row[col] = float(val)
                     rows.append(row)
 
-    grid_df = pd.DataFrame(rows)
-    return grid_df
+    return pd.DataFrame(rows)
 
 # ---------------------------------------------------------
-# Train final model za en material (realni + synthetic grid)
+# Train ULTRA+ model for one material (Excel weighted)
 # ---------------------------------------------------------
-def train_ultra_for_material(material_name: str):
+def train_ultra_plus(material_name: str):
     df_mat = df_encoded[df_encoded["material"] == material_name].drop(columns=["material"])
 
-    # base model na realnih podatkih
+    # 1) Base model samo na Excelu
     base_model, feature_cols = train_base_model(df_mat)
 
-    # synthetic grid (brez UTS)
+    # 2) Synthetic grid
     grid_df = generate_dense_grid(material_name, encoder, df)
 
-    # pripravimo grid v isti obliki kot df_mat (brez UTS)
     grid_encoded = grid_df.drop(columns=["material"])
-    # napovemo UTS z base modelom
     X_grid_ext = add_synthetic_features(grid_encoded)
-    uts_grid = base_model.predict(X_grid_ext)
 
+    uts_grid = base_model.predict(X_grid_ext)
     grid_encoded["UTS"] = uts_grid
 
-    # združimo realne + synthetic
+    # 3) Združimo Excel + synthetic
     df_full = pd.concat([df_mat, grid_encoded], axis=0).reset_index(drop=True)
+
+    # 4) Uteži (Excel = 10, synthetic = 1)
+    weights = np.where(df_full.index < len(df_mat), 10, 1)
 
     X_base_full = df_full.drop(columns=["UTS"])
     y_full = df_full["UTS"]
 
     X_ext_full = add_synthetic_features(X_base_full)
 
+    # 5) Final ULTRA+ model
     final_model = CatBoostRegressor(
         depth=8,
         learning_rate=0.03,
@@ -180,40 +176,32 @@ def train_ultra_for_material(material_name: str):
         random_seed=123,
         verbose=False
     )
-    final_model.fit(X_ext_full, y_full)
+    final_model.fit(X_ext_full, y_full, sample_weight=weights)
 
     return final_model, feature_cols
 
 # ---------------------------------------------------------
-# PLA
+# Train PLA
 # ---------------------------------------------------------
-model_pla, feature_cols_pla = train_ultra_for_material("PLA")
+model_pla, feature_cols_pla = train_ultra_plus("PLA")
 
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump(
-        {
-            "model": model_pla,
-            "encoder": encoder,
-            "feature_columns": feature_cols_pla,
-        },
+        {"model": model_pla, "encoder": encoder, "feature_columns": feature_cols_pla},
         f,
     )
 
-print(" ULTRA PLA model OK")
+print(" ULTRA+ PLA model OK")
 
 # ---------------------------------------------------------
-# PLA+CF
+# Train PLA+CF
 # ---------------------------------------------------------
-model_cf, feature_cols_cf = train_ultra_for_material("PLA+CF")
+model_cf, feature_cols_cf = train_ultra_plus("PLA+CF")
 
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump(
-        {
-            "model": model_cf,
-            "encoder": encoder,
-            "feature_columns": feature_cols_cf,
-        },
+        {"model": model_cf, "encoder": encoder, "feature_columns": feature_cols_cf},
         f,
     )
 
-print(" ULTRA PLA+CF model OK")
+print(" ULTRA+ PLA+CF model OK")
