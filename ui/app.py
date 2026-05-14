@@ -16,7 +16,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "..", "model")
 def load_model(material):
     if material == "PLA":
         model_path = os.path.join(MODEL_DIR, "model_pla.pkl")
-    else:
+    else:  # PLA+CF
         model_path = os.path.join(MODEL_DIR, "model_pla_cf.pkl")
 
     with open(model_path, "rb") as f:
@@ -49,7 +49,6 @@ layer = st.number_input("Debelina layerja (mm)", min_value=0.1, max_value=1.0, v
 if st.button("Napovej UTS"):
     model, encoder = load_model(material)
 
-    # Prepare input
     input_df = pd.DataFrame({
         "structure": [structure],
         "infill": [infill],
@@ -57,23 +56,19 @@ if st.button("Napovej UTS"):
         "layer_thickness": [layer]
     })
 
-    # One-hot encoding for structure
     encoded = encoder.transform(input_df[["structure"]])
     encoded_df = pd.DataFrame(
         encoded,
         columns=encoder.get_feature_names_out(["structure"])
     )
 
-    # Final model input
     model_input = pd.concat(
         [input_df.drop(columns=["structure"]), encoded_df],
         axis=1
     )
 
-    # Predict
     prediction = model.predict(model_input)[0]
 
-    # Save to history
     st.session_state["history"].append({
         "Structure": structure,
         "Material": material,

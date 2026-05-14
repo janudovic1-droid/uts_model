@@ -5,6 +5,9 @@ import pandas as pd
 from catboost import CatBoostRegressor
 from sklearn.preprocessing import OneHotEncoder
 
+# ---------------------------------------------------------
+# 0) Paths
+# ---------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 data_path = os.path.join(BASE_DIR, "data", "Mechanical_properties_edited.xlsx")
 model_dir = os.path.join(BASE_DIR, "model")
@@ -27,11 +30,14 @@ df = df.rename(columns={
 # obdrži samo to, kar UI uporablja
 df = df[["structure", "infill", "contours", "material", "layer_thickness", "UTS"]]
 
-# samo PLA in PLA CF
-df = df[df["material"].isin(["PLA", "PLA CF"])].reset_index(drop=True)
+# poenoti ime materiala (če je v Excelu "PLA CF")
+df["material"] = df["material"].replace({"PLA CF": "PLA+CF"})
+
+# samo PLA in PLA+CF
+df = df[df["material"].isin(["PLA", "PLA+CF"])].reset_index(drop=True)
 
 # ---------------------------------------------------------
-# 2) One-hot encoding za structure (da ostane kompatibilno z UI)
+# 2) One-hot encoding za structure (kompatibilno z UI)
 # ---------------------------------------------------------
 encoder = OneHotEncoder(sparse_output=False)
 encoded = encoder.fit_transform(df[["structure"]])
@@ -43,10 +49,10 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# 3) Split PLA / PLA CF
+# 3) Split PLA / PLA+CF
 # ---------------------------------------------------------
 df_pla = df_encoded[df_encoded["material"] == "PLA"].copy()
-df_cf = df_encoded[df_encoded["material"] == "PLA CF"].copy()
+df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].copy()
 
 df_pla = df_pla.drop(columns=["material"])
 df_cf = df_cf.drop(columns=["material"])
@@ -54,13 +60,7 @@ df_cf = df_cf.drop(columns=["material"])
 def prepare_xy(df_local):
     X = df_local.drop(columns=["UTS"]).copy()
     y = df_local["UTS"].copy()
-
-    # jitter: malo šuma na numeričnih feature-ih (ne na one-hot)
-    num_cols = ["infill", "contours", "layer_thickness"]
-    for c in num_cols:
-        if c in X.columns:
-            X[c] = X[c] + np.random.normal(0, 0.2, size=len(X))  # zelo majhen šum
-
+    # brez jitterja – model naj se nauči realnih razlik
     return X, y
 
 X_pla, y_pla = prepare_xy(df_pla)
@@ -85,7 +85,7 @@ model_pla.fit(X_pla, y_pla)
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump({"model": model_pla, "encoder": encoder}, f)
 
-print("✅ PLA CatBoost model OK")
+print(" PLA CatBoost model OK")
 
 model_cf = CatBoostRegressor(**params)
 model_cf.fit(X_cf, y_cf)
@@ -93,4 +93,4 @@ model_cf.fit(X_cf, y_cf)
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump({"model": model_cf, "encoder": encoder}, f)
 
-print("✅ PLA+CF CatBoost model OK")
+print(" PLA+CF CatBoost model OK")
