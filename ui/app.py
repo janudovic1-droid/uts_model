@@ -40,7 +40,7 @@ st.write("Vnesi parametre 3D tiska za napoved natezne trdnosti (UTS).")
 structure = st.selectbox("Structure", ["Hex", "Tri", "Lin"])
 material = st.selectbox("Material", ["PLA", "PLA+CF"])
 
-infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40, step=1)
+infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40, step=10)
 contours = st.number_input("Število kontur", min_value=1, max_value=10, value=1, step=1)
 layer = st.number_input("Debelina layerja (mm)", min_value=0.1, max_value=1.0, value=0.2, step=0.05)
 
