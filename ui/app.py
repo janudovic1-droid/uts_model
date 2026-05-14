@@ -113,14 +113,16 @@ if st.button("Napovej UTS"):
     if "history" not in st.session_state:
         st.session_state.history = []
 
-    st.session_state.history.append({
-        "Structure": structure,
-        "Material": material,
-        "Infill": infill,
-        "Contours": contours,
-        "Layer": layer,
-        "UTS napoved": round(uts_pred, 2)
-    })
+    if st.button("Napovej UTS", key="predict"):
+        ...
+        st.session_state.history.append({
+            "Structure": structure,
+            "Material": material,
+            "Infill": infill,
+            "Contours": contours,
+            "Layer": layer,
+            "UTS napoved": round(uts_pred, 2)
+        })
 
     st.subheader("Zgodovina napovedi")
     st.dataframe(pd.DataFrame(st.session_state.history))
