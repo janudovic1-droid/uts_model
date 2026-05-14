@@ -55,17 +55,13 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
 def load_model(material):
     if material == "PLA":
         model_path = os.path.join(MODEL_DIR, "model_pla.pkl")
-    else:  # PLA+CF
+    else:
         model_path = os.path.join(MODEL_DIR, "model_pla_cf.pkl")
 
     with open(model_path, "rb") as f:
         obj = pickle.load(f)
 
-    model = obj["model"]
-    encoder = obj["encoder"]
-    feature_columns = obj["feature_columns"]
-
-    return model, encoder, feature_columns
+    return obj["model"], obj["encoder"], obj["feature_columns"]
 
 # ------------------------------------------------------------
 # UI
@@ -78,9 +74,19 @@ infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40)
 contours = st.number_input("Število kontur", min_value=0, max_value=100, value=1)
 layer = st.number_input("Debelina layerja (mm)", min_value=0.05, max_value=1.0, value=0.20, step=0.01)
 
-if st.button("Napovej UTS"):
+# ------------------------------------------------------------
+# History init (OUTSIDE button → no duplicates)
+# ------------------------------------------------------------
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+# ------------------------------------------------------------
+# Prediction button
+# ------------------------------------------------------------
+if st.button("Napovej UTS", key="predict"):
     model, encoder, feature_columns = load_model(material)
 
+    # osnovni input
     input_df = pd.DataFrame([{
         "structure": structure,
         "infill": infill,
@@ -88,6 +94,7 @@ if st.button("Napovej UTS"):
         "layer_thickness": layer
     }])
 
+    # one-hot encoding
     encoded = encoder.transform(input_df[["structure"]])
     encoded_df = pd.DataFrame(
         encoded,
@@ -99,53 +106,36 @@ if st.button("Napovej UTS"):
         axis=1
     )
 
+    # poskrbimo za isti vrstni red stolpcev kot pri treningu
     for col in feature_columns:
         if col not in X_base.columns:
             X_base[col] = 0
     X_base = X_base[feature_columns]
 
+    # synthetic dummies
     X_ext = add_synthetic_features(X_base)
 
     uts_pred = float(model.predict(X_ext)[0])
 
     st.success(f"Napovedana natezna trdnost (UTS): {uts_pred:.2f} MPa")
 
-    if "history" not in st.session_state:
-        st.session_state.history = []
-
-    if st.button("Napovej UTS", key="predict"):
-        ...
-        st.session_state.history.append({
-            "Structure": structure,
-            "Material": material,
-            "Infill": infill,
-            "Contours": contours,
-            "Layer": layer,
-            "UTS napoved": round(uts_pred, 2)
-        })
-
-    st.subheader("Zgodovina napovedi")
-    st.dataframe(pd.DataFrame(st.session_state.history))
-
-
-    # dodamo synthetic dummies
-    X_ext = add_synthetic_features(X_base)
-
-    uts_pred = float(model.predict(X_ext)[0])
-
-    st.success(f"Napovedana natezna trdnost (UTS): {uts_pred:.2f} MPa")
-
-    if "history" not in st.session_state:
-        st.session_state.history = []
-
-    st.session_state.history.append({
+    # --------------------------------------------------------
+    # Add to history (NO DUPLICATES)
+    # --------------------------------------------------------
+    entry = {
         "Structure": structure,
         "Material": material,
         "Infill": infill,
         "Contours": contours,
         "Layer": layer,
         "UTS napoved": round(uts_pred, 2)
-    })
+    }
 
-    st.subheader("Zgodovina napovedi")
-    st.dataframe(pd.DataFrame(st.session_state.history))
+    if len(st.session_state.history) == 0 or st.session_state.history[-1] != entry:
+        st.session_state.history.append(entry)
+
+# ------------------------------------------------------------
+# Show history
+# ------------------------------------------------------------
+st.subheader("Zgodovina napovedi")
+st.dataframe(pd.DataFrame(st.session_state.history))
