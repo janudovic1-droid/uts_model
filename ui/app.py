@@ -37,7 +37,7 @@ if "history" not in st.session_state:
 st.title("Napovedni model UTS")
 st.write("Vnesi parametre 3D tiska za napoved natezne trdnosti (UTS).")
 
-structure = st.selectbox("Structure", ["Hexagonal", "Triangular", "Linear"])
+structure = st.selectbox("Structure", ["Hex", "Tri", "Lin"])
 material = st.selectbox("Material", ["PLA", "PLA+CF"])
 
 infill = st.number_input("Infill (%)", min_value=0, max_value=100, value=40, step=10)
