@@ -10,10 +10,10 @@ import pandas as pd
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "..", "model")
 
-# ---------------------------------------------------------
-# 2) Load ensemble models
-# ---------------------------------------------------------
-@st.cache_resource
+# ------------------------------------------------------------
+# 2) Load ensemble models (force reload on every run)
+# ------------------------------------------------------------
+@st.cache_resource(show_spinner=False, ttl=1)
 def load_model(material):
     if material == "PLA":
         model_path = os.path.join(MODEL_DIR, "model_pla.pkl")
@@ -23,7 +23,8 @@ def load_model(material):
     with open(model_path, "rb") as f:
         obj = pickle.load(f)
 
-    return obj["models"], obj["encoder"]
+    return obj
+
 
 # ---------------------------------------------------------
 # 3) Init history
