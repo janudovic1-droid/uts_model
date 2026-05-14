@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostRegressor
 from sklearn.preprocessing import OneHotEncoder
-from statsmodels.nonparametric.smoothers_lowess import lowess
 
 # ---------------------------------------------------------
 # Paths
@@ -15,7 +14,7 @@ model_dir = os.path.join(BASE_DIR, "model")
 os.makedirs(model_dir, exist_ok=True)
 
 # ---------------------------------------------------------
-# Load + clean
+# Load + clean Excel
 # ---------------------------------------------------------
 df = pd.read_excel(data_path)
 
@@ -47,44 +46,41 @@ encoded_df = pd.DataFrame(
 df_encoded = pd.concat([df.drop(columns=["structure"]), encoded_df], axis=1)
 
 # ---------------------------------------------------------
-# Smooth + blend real data
+# Synthetic feature generator (ADVANCED)
 # ---------------------------------------------------------
-def smooth_and_blend(df_local):
-    df_local = df_local.sort_values("infill").copy()
+def add_synthetic_features(df_local):
+    df_local = df_local.copy()
 
-    # LOWESS smoothing
-    smoothed = lowess(df_local["UTS"], df_local["infill"], frac=0.4)
-    df_local["UTS_smooth"] = smoothed[:, 1]
+    # Polinomi
+    df_local["infill2"] = df_local["infill"] ** 2
+    df_local["infill3"] = df_local["infill"] ** 3
+    df_local["infill4"] = df_local["infill"] ** 4
 
-    # blend real + smooth (kompromis)
-    df_local["UTS_blend"] = (
-        0.6 * df_local["UTS"] +
-        0.4 * df_local["UTS_smooth"]
-    )
+    df_local["contours2"] = df_local["contours"] ** 2
+    df_local["contours3"] = df_local["contours"] ** 3
 
-    # interpolate missing infill values
-    infill_new = np.arange(df_local["infill"].min(), df_local["infill"].max() + 1, 1)
-    uts_new = np.interp(infill_new, df_local["infill"], df_local["UTS_blend"])
+    df_local["layer2"] = df_local["layer_thickness"] ** 2
 
-    df_new = pd.DataFrame({
-        "infill": infill_new,
-        "UTS": uts_new,
-        "contours": df_local["contours"].iloc[0],
-        "layer_thickness": df_local["layer_thickness"].iloc[0]
-    })
+    # Interakcije
+    df_local["infill_x_contours"] = df_local["infill"] * df_local["contours"]
+    df_local["infill_x_layer"] = df_local["infill"] * df_local["layer_thickness"]
+    df_local["contours_x_layer"] = df_local["contours"] * df_local["layer_thickness"]
 
-    # add structure one-hot columns
-    for col in df_local.columns:
-        if col.startswith("structure_"):
-            df_new[col] = df_local[col].iloc[0]
+    # Log transformacije
+    df_local["log_infill"] = np.log(df_local["infill"] + 1)
 
-    return df_new
+    # Koren
+    df_local["sqrt_infill"] = np.sqrt(df_local["infill"])
 
-df_pla = df_encoded[df_encoded["material"] == "PLA"].drop(columns=["material"])
-df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].drop(columns=["material"])
+    # Eksponent
+    df_local["exp_layer"] = np.exp(-df_local["layer_thickness"])
 
-df_pla_blend = smooth_and_blend(df_pla)
-df_cf_blend = smooth_and_blend(df_cf)
+    # Sinus za mikro-gladkost
+    df_local["sin_infill"] = np.sin(df_local["infill"] / 10)
+
+    return df_local
+
+df_encoded = add_synthetic_features(df_encoded)
 
 # ---------------------------------------------------------
 # Train CatBoost
@@ -94,9 +90,9 @@ def train_catboost(df_local):
     y = df_local["UTS"]
 
     model = CatBoostRegressor(
-        depth=6,
+        depth=8,
         learning_rate=0.03,
-        n_estimators=1500,
+        n_estimators=2000,
         loss_function="RMSE",
         random_seed=42,
         verbose=False
@@ -105,16 +101,21 @@ def train_catboost(df_local):
     return [model]
 
 # PLA
-models_pla = train_catboost(df_pla_blend)
+df_pla = df_encoded[df_encoded["material"] == "PLA"].drop(columns=["material"])
+models_pla = train_catboost(df_pla)
+
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump({"models": models_pla, "encoder": encoder}, f)
 
-print("KOMPROMISNI PLA model OK")
+print(" NAJMOČNEJŠI PLA model OK")
 
 # PLA+CF
-models_cf = train_catboost(df_cf_blend)
+df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].drop(columns=["material"])
+models_cf = train_catboost(df_cf)
+
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump({"models": models_cf, "encoder": encoder}, f)
 
-print("KOMPROMISNI PLA+CF model OK")
+print(" NAJMOČNEJŠI PLA+CF model OK")
+
 
