@@ -81,36 +81,13 @@ def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
     return df_local
 
 # ---------------------------------------------------------
-# Wrapper model, ki sam generira dummies pri predict()
-# ---------------------------------------------------------
-class UTSModel:
-    def __init__(self, cat_model, feature_columns):
-        self.cat_model = cat_model
-        self.feature_columns = feature_columns  # osnovni featurji, ki jih dobi iz appa
-
-    def predict(self, X: pd.DataFrame):
-        # X pride iz app.py: infill, contours, layer_thickness + one-hot structure
-        X = X.copy()
-        # poskrbimo, da so stolpci v pravem vrstnem redu / prisotni
-        for col in self.feature_columns:
-            if col not in X.columns:
-                X[col] = 0
-
-        X = X[self.feature_columns]
-        X_ext = add_synthetic_features(X)
-        return self.cat_model.predict(X_ext)
-
-# ---------------------------------------------------------
 # Train CatBoost na razširjenih featurjih
 # ---------------------------------------------------------
 def train_catboost(df_local: pd.DataFrame):
     X_base = df_local.drop(columns=["UTS"])
     y = df_local["UTS"]
 
-    # osnovni featurji, ki jih bo app poslal:
-    base_feature_cols = list(X_base.columns)
-
-    # razširjeni featurji za trening
+    feature_cols = list(X_base.columns)
     X_ext = add_synthetic_features(X_base)
 
     model = CatBoostRegressor(
@@ -123,17 +100,23 @@ def train_catboost(df_local: pd.DataFrame):
     )
     model.fit(X_ext, y)
 
-    wrapped = UTSModel(model, base_feature_cols)
-    return [wrapped]
+    return model, feature_cols
 
 # ---------------------------------------------------------
 # Train PLA
 # ---------------------------------------------------------
 df_pla = df_encoded[df_encoded["material"] == "PLA"].drop(columns=["material"])
-models_pla = train_catboost(df_pla)
+model_pla, feature_cols_pla = train_catboost(df_pla)
 
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
-    pickle.dump({"models": models_pla, "encoder": encoder}, f)
+    pickle.dump(
+        {
+            "model": model_pla,
+            "encoder": encoder,
+            "feature_columns": feature_cols_pla,
+        },
+        f,
+    )
 
 print(" NAJMOČNEJŠI PLA model OK")
 
@@ -141,10 +124,17 @@ print(" NAJMOČNEJŠI PLA model OK")
 # Train PLA+CF
 # ---------------------------------------------------------
 df_cf = df_encoded[df_encoded["material"] == "PLA+CF"].drop(columns=["material"])
-models_cf = train_catboost(df_cf)
+model_cf, feature_cols_cf = train_catboost(df_cf)
 
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
-    pickle.dump({"models": models_cf, "encoder": encoder}, f)
+    pickle.dump(
+        {
+            "model": model_cf,
+            "encoder": encoder,
+            "feature_columns": feature_cols_cf,
+        },
+        f,
+    )
 
 print(" NAJMOČNEJŠI PLA+CF model OK")
 

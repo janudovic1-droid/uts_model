@@ -11,22 +11,49 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "..", "model")
 
 # ------------------------------------------------------------
-# Load model + encoder (always reload)
+# Synthetic feature generator – ISTO kot v train_models.py
+# ------------------------------------------------------------
+def add_synthetic_features(df_local: pd.DataFrame) -> pd.DataFrame:
+    df_local = df_local.copy()
+
+    df_local["infill2"] = df_local["infill"] ** 2
+    df_local["infill3"] = df_local["infill"] ** 3
+    df_local["infill4"] = df_local["infill"] ** 4
+
+    df_local["contours2"] = df_local["contours"] ** 2
+    df_local["contours3"] = df_local["contours"] ** 3
+
+    df_local["layer2"] = df_local["layer_thickness"] ** 2
+
+    df_local["infill_x_contours"] = df_local["infill"] * df_local["contours"]
+    df_local["infill_x_layer"] = df_local["infill"] * df_local["layer_thickness"]
+    df_local["contours_x_layer"] = df_local["contours"] * df_local["layer_thickness"]
+
+    df_local["log_infill"] = np.log(df_local["infill"] + 1)
+    df_local["sqrt_infill"] = np.sqrt(df_local["infill"])
+    df_local["exp_layer"] = np.exp(-df_local["layer_thickness"])
+    df_local["sin_infill"] = np.sin(df_local["infill"] / 10)
+
+    return df_local
+
+# ------------------------------------------------------------
+# Load model + encoder + feature_columns
 # ------------------------------------------------------------
 @st.cache_resource(show_spinner=False, ttl=1)
 def load_model(material):
     if material == "PLA":
         model_path = os.path.join(MODEL_DIR, "model_pla.pkl")
-    else:
+    else:  # PLA+CF
         model_path = os.path.join(MODEL_DIR, "model_pla_cf.pkl")
 
     with open(model_path, "rb") as f:
         obj = pickle.load(f)
 
-    models = obj["models"]
+    model = obj["model"]
     encoder = obj["encoder"]
+    feature_columns = obj["feature_columns"]
 
-    return models, encoder
+    return model, encoder, feature_columns
 
 # ------------------------------------------------------------
 # UI
@@ -40,9 +67,9 @@ contours = st.number_input("Število kontur", min_value=0, max_value=100, value=
 layer = st.number_input("Debelina layerja (mm)", min_value=0.05, max_value=1.0, value=0.20, step=0.01)
 
 if st.button("Napovej UTS"):
-    models, encoder = load_model(material)
+    model, encoder, feature_columns = load_model(material)
 
-    # Prepare input
+    # osnovni input
     input_df = pd.DataFrame([{
         "structure": structure,
         "infill": infill,
@@ -50,19 +77,31 @@ if st.button("Napovej UTS"):
         "layer_thickness": layer
     }])
 
-    # One-hot encode structure
+    # one-hot za structure
     encoded = encoder.transform(input_df[["structure"]])
-    encoded_df = pd.DataFrame(encoded, columns=encoder.get_feature_names_out(["structure"]))
+    encoded_df = pd.DataFrame(
+        encoded,
+        columns=encoder.get_feature_names_out(["structure"])
+    )
 
-    X = pd.concat([input_df.drop(columns=["structure"]), encoded_df], axis=1)
+    X_base = pd.concat(
+        [input_df.drop(columns=["structure"]), encoded_df],
+        axis=1
+    )
 
-    # Predict (single model)
-    model = models[0]
-    uts_pred = float(model.predict(X)[0])
+    # poskrbimo za isti vrstni red stolpcev kot pri treningu
+    for col in feature_columns:
+        if col not in X_base.columns:
+            X_base[col] = 0
+    X_base = X_base[feature_columns]
+
+    # dodamo synthetic dummies
+    X_ext = add_synthetic_features(X_base)
+
+    uts_pred = float(model.predict(X_ext)[0])
 
     st.success(f"Napovedana natezna trdnost (UTS): {uts_pred:.2f} MPa")
 
-    # History
     if "history" not in st.session_state:
         st.session_state.history = []
 
