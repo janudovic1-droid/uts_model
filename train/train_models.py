@@ -71,9 +71,9 @@ X_cf, y_cf = prepare_xy(df_cf)
 # ---------------------------------------------------------
 def train_catboost(X, y):
     model = CatBoostRegressor(
-        depth=8,
-        learning_rate=0.05,
-        n_estimators=1200,
+        depth=6,
+        learning_rate=0.03,
+        n_estimators=1500,
         loss_function="RMSE",
         random_seed=42,
         verbose=False
@@ -86,11 +86,11 @@ models_pla = train_catboost(X_pla, y_pla)
 with open(os.path.join(model_dir, "model_pla.pkl"), "wb") as f:
     pickle.dump({"models": models_pla, "encoder": encoder}, f)
 
-print(" FINAL PLA model OK")
+print(" FINAL SMOOTH PLA model OK")
 
 # PLA+CF
 models_cf = train_catboost(X_cf, y_cf)
 with open(os.path.join(model_dir, "model_pla_cf.pkl"), "wb") as f:
     pickle.dump({"models": models_cf, "encoder": encoder}, f)
 
-print(" FINAL PLA+CF model OK")
+print(" FINAL SMOOTH PLA+CF model OK")
